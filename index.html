@@ -95,10 +95,11 @@ input[type=file]::file-selector-button{background:var(--blue);color:#fff;border:
       <div class="full" data-k="comentarios"><label class="l" for="comentarios">¿Algún comentario adicional?</label><textarea id="comentarios"></textarea></div>
     </div>
     
-      <div class="full sec">Documentos (opcional)</div>
-      <p class="full hint">Si ya los tienes a la mano, puedes adjuntarlos en PDF (máximo 4 MB cada uno).</p>
-      <div class="full" data-k="constancia"><label class="l" for="doc_constancia">Constancia de situación fiscal / RFC (PDF)</label><input type="file" id="doc_constancia" accept="application/pdf,.pdf"><div class="err"></div></div>
-      <div class="full" data-k="ine"><label class="l" for="doc_ine">INE (PDF)</label><input type="file" id="doc_ine" accept="application/pdf,.pdf"><div class="err"></div></div>
+            <div class="full sec">Documentos (opcional)</div>
+      <p class="full hint">Puedes adjuntar PDF o una foto (máximo 4 MB por PDF; las fotos se reducen solas).</p>
+      <div class="full" data-k="constancia"><label class="l" for="doc_constancia">Constancia de situación fiscal / RFC (PDF o foto)</label><input type="file" id="doc_constancia" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"><div class="err"></div></div>
+      <div class="full" data-k="ine"><label class="l" for="doc_ine">INE (PDF o foto)</label><input type="file" id="doc_ine" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"><div class="err"></div></div>
+      <div class="full" data-k="estado"><label class="l" for="doc_estado">Estado de cuenta bancario (PDF o foto)</label><input type="file" id="doc_estado" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"><div class="err"></div></div>
       <div class="full" data-k="estado"><label class="l" for="doc_estado">Estado de cuenta bancario (PDF)</label><input type="file" id="doc_estado" accept="application/pdf,.pdf"><div class="err"></div></div>
     <input class="hp" type="text" id="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
     <button type="submit" id="btn">Enviar registro</button>
@@ -126,8 +127,24 @@ function radio(n){var r=f.querySelector('input[name="'+n+'"]:checked');return r?
 });
 function mark(k,bad){var d=f.querySelector('[data-k="'+k+'"]');if(d)d.classList.toggle("bad",bad);return bad}
 var DOCS=[["constancia","doc_constancia"],["ine","doc_ine"],["estado","doc_estado"]];
-var MAX_MB=4,MAX_TOTAL_MB=12;
+var MAX_MB=4,MAX_TOTAL_MB=12,MAX_FOTO_MB=20,MAX_PX=1600;
+function esPDF(file){return file.type==="application/pdf"||/\.pdf$/i.test(file.name)}
+function esFoto(file){return /^image\/(jpeg|png)$/.test(file.type)||/\.(jpe?g|png)$/i.test(file.name)}
 function leerB64(file){return new Promise(function(ok,fail){var r=new FileReader();r.onload=function(){ok(r.result.split(",")[1])};r.onerror=function(){fail(new Error("lectura"))};r.readAsDataURL(file)})}
+function fotoB64(file){
+  return new Promise(function(ok,fail){
+    var url=URL.createObjectURL(file),img=new Image();
+    img.onload=function(){
+      var w=img.naturalWidth,h=img.naturalHeight,s=Math.min(1,MAX_PX/Math.max(w,h));
+      var c=document.createElement("canvas");c.width=Math.round(w*s);c.height=Math.round(h*s);
+      var x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);
+      URL.revokeObjectURL(url);
+      ok(c.toDataURL("image/jpeg",0.82).split(",")[1]);
+    };
+    img.onerror=function(){URL.revokeObjectURL(url);fail(new Error("foto"))};
+    img.src=url;
+  });
+}
 
 f.addEventListener("submit",function(e){
   e.preventDefault();
@@ -143,14 +160,19 @@ f.addEventListener("submit",function(e){
   DOCS.forEach(function(p){
     var file=$(p[1]).files[0],msg="";
     if(file){
-      total+=file.size;
-      if(file.type!=="application/pdf"&&!/\.pdf$/i.test(file.name))msg="Solo se aceptan archivos PDF";
-      else if(file.size>MAX_MB*1048576)msg="El archivo pesa más de "+MAX_MB+" MB";
+      if(esPDF(file)){
+        total+=file.size;
+        if(file.size>MAX_MB*1048576)msg="El PDF pesa más de "+MAX_MB+" MB";
+      }else if(esFoto(file)){
+        if(file.size>MAX_FOTO_MB*1048576)msg="La foto pesa demasiado";
+      }else{
+        msg="Solo se aceptan PDF o fotos (JPG/PNG)";
+      }
     }
     f.querySelector('[data-k="'+p[0]+'"] .err').textContent=msg;
     bad=mark(p[0],!!msg)||bad;
   });
-  if(total>MAX_TOTAL_MB*1048576){alert("Los documentos juntos no pueden pasar de "+MAX_TOTAL_MB+" MB.");bad=true}
+  if(total>MAX_TOTAL_MB*1048576){alert("Los PDFs juntos no pueden pasar de "+MAX_TOTAL_MB+" MB.");bad=true}
 
   if(bad){var first=f.querySelector(".bad");if(first)first.scrollIntoView({behavior:"smooth",block:"center"});return}
 
@@ -168,36 +190,16 @@ f.addEventListener("submit",function(e){
 
   Promise.all(DOCS.map(function(p){
     var file=$(p[1]).files[0];
-    return file?leerB64(file).then(function(s){d.append(p[0]+"_data",s)}):null;
+    if(!file)return null;
+    var lector=esFoto(file)?fotoB64(file):leerB64(file);
+    return lector.then(function(s){d.append(p[0]+"_data",s)});
   }))
   .then(function(){return fetch(SCRIPT_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:d.toString()})})
   .then(function(){f.style.display="none";$("ok").style.display="block";$("ok").scrollIntoView({behavior:"smooth",block:"center"})})
-  .catch(function(){b.disabled=false;b.textContent="Enviar registro";alert("No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.")});
-});
-
-f.addEventListener("submit_old",function(e){
-  e.preventDefault();
-  if($("hp").value)return;
-  var bad=false;
-  bad=mark("nombre",!$("nombre").value.trim())||bad;
-  bad=mark("telefono",$("telefono").value.replace(/\D/g,"").length<8)||bad;
-  bad=mark("correo",!/^\S+@\S+\.\S+$/.test($("correo").value.trim()))||bad;
-  bad=mark("carga",!$("carga").value.trim())||bad;
-  ["unidades","consumo","contacto"].forEach(function(n){bad=mark(n,!radio(n))||bad});
-  if(bad){var first=f.querySelector(".bad");if(first)first.scrollIntoView({behavior:"smooth",block:"center"});return}
-
-  var d=new URLSearchParams();
-  ["nombre","empresa","direccion","usdot","telefono","correo","carga","comentarios"].forEach(function(k){d.append(k,$(k).value.trim())});
-  ["unidades","contacto"].forEach(function(k){d.append(k,radio(k))});
-  [["consumo","consumo_o"],["origen","origen_o"]].forEach(function(p){
-    var v=radio(p[0]);
-    if(v==="__other__")v="Otro: "+($(p[1]).value.trim()||"(sin detalle)");
-    d.append(p[0],v)
+  .catch(function(err){
+    b.disabled=false;b.textContent="Enviar registro";
+    alert(err&&err.message==="foto"?"No se pudo leer una de las fotos. Prueba con otra o súbela en PDF.":"No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.")
   });
-  var b=$("btn");b.disabled=true;b.textContent="Enviando…";
-  fetch(SCRIPT_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:d.toString()})
-   .then(function(){f.style.display="none";$("ok").style.display="block";$("ok").scrollIntoView({behavior:"smooth",block:"center"})})
-   .catch(function(){b.disabled=false;b.textContent="Enviar registro";alert("No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.")});
 });
 
 /* ====== VIDEO DEL ENCABEZADO (carga diferida) ======
